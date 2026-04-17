@@ -388,6 +388,41 @@ class AgentAuthManager:
             logger.error(f"CIBA OBO token exchange failed: {e}")
             raise TokenError(f"CIBA OBO token exchange failed: {e}")
 
+    async def switch_token_to_organization(
+        self,
+        token: str,
+        switching_organization: str,
+        scopes: Optional[List[str]] = None
+    ) -> OAuthToken:
+        """Switch token to a sub-organization.
+        
+        :param token: The current access token to be switched.
+        :param switching_organization: The ID or UUID of the target organization.
+        :param scopes: Optional list of scopes to request.
+        :return: OAuth token for the switched organization.
+        """
+        if not token:
+            raise ValidationError("Token is required for organization switch.")
+        if not switching_organization:
+            raise ValidationError("switching_organization is required.")
+            
+        scope_str = ' '.join(scopes) if scopes else "add"
+        
+        try:
+            switched_token = await self.token_client.get_token(
+                'organization_switch',
+                token=token,
+                switching_organization=switching_organization,
+                scope=scope_str
+            )
+            return switched_token
+            
+        except (TokenError, ValidationError):
+            raise
+        except Exception as e:
+            logger.error(f"Organization switch failed: {e}")
+            raise TokenError(f"Organization switch failed: {e}")
+
     async def revoke_token(
         self, 
         token: str, 

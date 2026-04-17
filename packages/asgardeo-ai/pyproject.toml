@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "asgardeo_ai"
-version = "0.2.1"
+version = "0.2.3"
 description = "Async Python SDK for Asgardeo AI agent authentication"
 authors = ["Thilina Senarath <thilinas@wso2.com>"]
 license = "MIT"
@@ -10,7 +10,7 @@ packages = [{ include = "asgardeo_ai", from = "src" }]
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 httpx = "^0.28.0"
-asgardeo = "^0.2.1"
+asgardeo = "^0.2.2"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
