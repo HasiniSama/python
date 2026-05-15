@@ -20,7 +20,7 @@ import logging
 import base64
 import os
 import time
-from typing import Callable, Dict, List, Optional, Tuple, Any
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Any
 from urllib.parse import urlencode
 from dataclasses import dataclass
 
@@ -42,6 +42,8 @@ from asgardeo import (
 )
 
 logger = logging.getLogger(__name__)
+
+OrgDiscoveryType = Literal["orgID", "orgHandle", "org", "emailDomain"]
 
 
 @dataclass
@@ -151,22 +153,22 @@ class AgentAuthManager:
         org_scopes: Optional[List[str]] = None
     ) -> OAuthToken:
         """Get access token for the AI agent and switch it to a sub-organization.
-        
+
         :param switching_organization: The ID or UUID of the target organization.
-        :param agent_scopes: Optional list of OAuth scopes to request for the initial agent token.
-        :param org_scopes: Optional list of OAuth scopes to request for the switched token.
-        :return: OAuth token for the switched organization.
+        :param agent_scopes: Optional list of OAuth2 scopes to request for the initial agent token.
+        :param org_scopes: Optional list of OAuth2 scopes to request for the switched token.
+        :return: OAuth2 token for the switched organization.
         """
         if not switching_organization:
             raise ValidationError("switching_organization is required.")
 
-        # 1. Get agent token
+        # 1. Get agent token.
         agent_token = await self.get_agent_token(scopes=agent_scopes)
-        
+
         if not agent_token or not agent_token.access_token:
             raise TokenError("Failed to obtain a valid agent access token.")
-            
-        # 2. Switch token to organization
+
+        # 2. Switch token to organization.
         return await self.switch_token_to_organization(
             token=agent_token.access_token,
             switching_organization=switching_organization,
@@ -257,58 +259,66 @@ class AgentAuthManager:
         )
         return auth_url, state, code_verifier    
 
+    def _build_org_discovery_params(self, org_discovery_type: OrgDiscoveryType, discovery_value: str) -> dict:
+        match org_discovery_type:
+            case "orgID":
+                return {"orgId": discovery_value}
+            case "orgHandle":
+                return {"orgHandle": discovery_value}
+            case "org":
+                return {"org": discovery_value}
+            case "emailDomain":
+                return {"login_hint": discovery_value, "orgDiscoveryType": "emailDomain"}
+            case _:
+                raise ValidationError(f"Unsupported org_discovery_type: {org_discovery_type}")
+
     def get_org_authorization_url(
         self,
         scopes: List[str],
-        org_discovery_type: str,
-        value: str,
+        org_discovery_type: OrgDiscoveryType,
+        discovery_value: str,
         state: Optional[str] = None,
         resource: Optional[str] = None,
+        isEnhancedOrgAuth: Optional[bool] = False,
         **kwargs: Any,
     ) -> Tuple[str, str]:
         """Generate authorization URL for organization-specific user authentication.
-        
-        :param scopes: List of OAuth scopes to request
+
+        :param scopes: List of OAuth2 scopes to request
         :param org_discovery_type: The type of organization discovery ('orgID', 'orgHandle', 'org', 'emailDomain')
-        :param value: The value for the discovery type
+        :param discovery_value: The identifier whose meaning depends on ``org_discovery_type``:
+            ``"orgID"`` → organization UUID, ``"orgHandle"`` → org handle slug,
+            ``"org"`` → org name, ``"emailDomain"`` → user email address used as login hint.
         :param state: Optional state parameter (generated if not provided)
         :param resource: Optional resource parameter
+        :param isEnhancedOrgAuth: If true, omits the fidp=OrganizationSSO parameter
         :param kwargs: Additional parameters for the authorization URL
         :return: Tuple of (authorization_url, state)
         """
         if not state:
             state = generate_state()
-            
+
         auth_params = {
             "client_id": self.config.client_id,
             "redirect_uri": self.config.redirect_uri,
             "scope": " ".join(scopes),
             "state": state,
             "response_type": "code",
-            "fidp": "OrganizationSSO",
         }
-        
-        # Switch case to handle each discovery type
-        if org_discovery_type == "orgID":
-            auth_params["orgId"] = value
-        elif org_discovery_type == "orgHandle":
-            auth_params["orgHandle"] = value
-        elif org_discovery_type == "org":
-            auth_params["org"] = value
-        elif org_discovery_type == "emailDomain":
-            auth_params["login_hint"] = value
-            auth_params["orgDiscoveryType"] = "emailDomain"
-        else:
-            raise ValueError(f"Unsupported org_discovery_type: {org_discovery_type}")
-            
+
+        if not isEnhancedOrgAuth:
+            auth_params["fidp"] = "OrganizationSSO"
+
+        auth_params.update(self._build_org_discovery_params(org_discovery_type, discovery_value))
+
         if resource:
             auth_params["resource"] = resource
-            
+
         if self.agent_config:
             auth_params["requested_actor"] = self.agent_config.agent_id
-            
+
         auth_params.update(kwargs)
-        
+
         auth_url = build_authorization_url(
             f"{self.config.base_url}/oauth2/authorize",
             auth_params
@@ -318,27 +328,31 @@ class AgentAuthManager:
     def get_org_authorization_url_with_pkce(
         self,
         scopes: List[str],
-        org_discovery_type: str,
-        value: str,
+        org_discovery_type: OrgDiscoveryType,
+        discovery_value: str,
         state: Optional[str] = None,
         resource: Optional[str] = None,
+        isEnhancedOrgAuth: Optional[bool] = False,
         **kwargs: Any,
     ) -> Tuple[str, str, str]:
         """Generate authorization URL for organization-specific user authentication with PKCE.
-        
-        :param scopes: List of OAuth scopes to request
+
+        :param scopes: List of OAuth2 scopes to request
         :param org_discovery_type: The type of organization discovery ('orgID', 'orgHandle', 'org', 'emailDomain')
-        :param value: The value for the discovery type
+        :param discovery_value: The identifier whose meaning depends on ``org_discovery_type``:
+            ``"orgID"`` → organization UUID, ``"orgHandle"`` → org handle slug,
+            ``"org"`` → org name, ``"emailDomain"`` → user email address used as login hint.
         :param state: Optional state parameter (generated if not provided)
         :param resource: Optional resource parameter
+        :param isEnhancedOrgAuth: If true, omits the fidp=OrganizationSSO parameter
         :param kwargs: Additional parameters for the authorization URL
         :return: Tuple of (authorization_url, state, code_verifier)
         """
         if not state:
             state = generate_state()
 
-        code_verifier, code_challenge = generate_pkce_pair()    
-            
+        code_verifier, code_challenge = generate_pkce_pair()
+
         auth_params = {
             "client_id": self.config.client_id,
             "redirect_uri": self.config.redirect_uri,
@@ -347,30 +361,21 @@ class AgentAuthManager:
             "response_type": "code",
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
-            "fidp": "OrganizationSSO",
         }
-        
-        # Switch case to handle each discovery type
-        if org_discovery_type == "orgID":
-            auth_params["orgId"] = value
-        elif org_discovery_type == "orgHandle":
-            auth_params["orgHandle"] = value
-        elif org_discovery_type == "org":
-            auth_params["org"] = value
-        elif org_discovery_type == "emailDomain":
-            auth_params["login_hint"] = value
-            auth_params["orgDiscoveryType"] = "emailDomain"
-        else:
-            raise ValueError(f"Unsupported org_discovery_type: {org_discovery_type}")
-            
+
+        if not isEnhancedOrgAuth:
+            auth_params["fidp"] = "OrganizationSSO"
+
+        auth_params.update(self._build_org_discovery_params(org_discovery_type, discovery_value))
+
         if resource:
             auth_params["resource"] = resource
-            
+
         if self.agent_config:
             auth_params["requested_actor"] = self.agent_config.agent_id
-            
+
         auth_params.update(kwargs)
-        
+
         auth_url = build_authorization_url(
             f"{self.config.base_url}/oauth2/authorize",
             auth_params
@@ -488,7 +493,7 @@ class AgentAuthManager:
 
         :param login_hint: Username or identifier of the user to authenticate
         :param agent_token: The agent's OAuthToken (used as actor_token for delegation)
-        :param scopes: List of OAuth scopes to request
+        :param scopes: List of OAuth2 scopes to request
         :param binding_message: Message displayed to the user during authentication
         :param notification_channel: Notification channel (email, sms, external)
         :param timeout: Maximum time to wait for authentication in seconds
@@ -534,8 +539,8 @@ class AgentAuthManager:
         except (CIBAAuthenticationError, ValidationError):
             raise
         except Exception as e:
-            logger.error(f"CIBA OBO token exchange failed: {e}")
-            raise TokenError(f"CIBA OBO token exchange failed: {e}")
+            logger.error(f"CIBA OBO token exchange failed: {e}", exc_info=True)
+            raise TokenError(f"CIBA OBO token exchange failed: {e}") from e
 
     async def switch_token_to_organization(
         self,
@@ -544,19 +549,19 @@ class AgentAuthManager:
         scopes: Optional[List[str]] = None
     ) -> OAuthToken:
         """Switch token to a sub-organization.
-        
+
         :param token: The current access token to be switched.
         :param switching_organization: The ID or UUID of the target organization.
         :param scopes: Optional list of scopes to request.
-        :return: OAuth token for the switched organization.
+        :return: OAuth2 token for the switched organization.
         """
         if not token:
             raise ValidationError("Token is required for organization switch.")
         if not switching_organization:
             raise ValidationError("switching_organization is required.")
-            
-        scope_str = ' '.join(scopes) if scopes else "add"
-        
+
+        scope_str = ' '.join(scopes) if scopes else None
+
         try:
             switched_token = await self.token_client.get_token(
                 'organization_switch',
@@ -565,12 +570,12 @@ class AgentAuthManager:
                 scope=scope_str
             )
             return switched_token
-            
+
         except (TokenError, ValidationError):
             raise
         except Exception as e:
-            logger.error(f"Organization switch failed: {e}")
-            raise TokenError(f"Organization switch failed: {e}")
+            logger.error(f"Organization switch failed: {e}", exc_info=True)
+            raise TokenError(f"Organization switch failed: {e}") from e
 
     async def revoke_token(
         self, 
