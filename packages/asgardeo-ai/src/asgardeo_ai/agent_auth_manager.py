@@ -21,7 +21,7 @@ import base64
 import os
 import time
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Any
-from urllib.parse import urlencode
+from urllib.parse import unquote
 from dataclasses import dataclass
 
 from asgardeo import (
@@ -45,6 +45,23 @@ logger = logging.getLogger(__name__)
 
 OrgDiscoveryType = Literal["orgID", "orgHandle", "org", "emailDomain"]
 
+_RESERVED_AUTH_KEYS = frozenset({
+    "client_id",
+    "redirect_uri",
+    "scope",
+    "state",
+    "response_type",
+    "resource",
+    "fidp",
+    "requested_actor",
+    "orgId",
+    "orgHandle",
+    "org",
+    "login_hint",
+    "orgDiscoveryType",
+    "code_challenge",
+    "code_challenge_method",
+})
 
 @dataclass
 class AgentConfig:
@@ -206,15 +223,20 @@ class AgentAuthManager:
             
         if self.agent_config:
             auth_params["requested_actor"] = self.agent_config.agent_id
-            
+
+        conflicts = _RESERVED_AUTH_KEYS.intersection(kwargs)
+        if conflicts:
+            raise ValidationError(
+                f"Reserved authorization parameters cannot be overridden: {', '.join(sorted(conflicts))}"
+            )
         auth_params.update(kwargs)
-        
+
         auth_url = build_authorization_url(
             f"{self.config.base_url}/oauth2/authorize",
             auth_params
         )
         return auth_url, state
-    
+
     def get_authorization_url_with_pkce(
         self,
         scopes: List[str],
@@ -250,25 +272,34 @@ class AgentAuthManager:
             
         if self.agent_config:
             auth_params["requested_actor"] = self.agent_config.agent_id
-            
+
+        conflicts = _RESERVED_AUTH_KEYS.intersection(kwargs)
+        if conflicts:
+            raise ValidationError(
+                f"Reserved authorization parameters cannot be overridden: {', '.join(sorted(conflicts))}"
+            )
         auth_params.update(kwargs)
-        
+
         auth_url = build_authorization_url(
             f"{self.config.base_url}/oauth2/authorize",
             auth_params
         )
-        return auth_url, state, code_verifier    
+        return auth_url, state, code_verifier
 
-    def _build_org_discovery_params(self, org_discovery_type: OrgDiscoveryType, discovery_value: str) -> dict:
+    def _build_org_discovery_params(self, org_discovery_type: OrgDiscoveryType, discovery_input: str) -> dict:
+        discovery_input = unquote(discovery_input.strip()) if discovery_input else ""
+        if not discovery_input:
+            raise ValidationError("discovery_input is required.")
+
         match org_discovery_type:
             case "orgID":
-                return {"orgId": discovery_value}
+                return {"orgId": discovery_input}
             case "orgHandle":
-                return {"orgHandle": discovery_value}
+                return {"orgHandle": discovery_input}
             case "org":
-                return {"org": discovery_value}
+                return {"org": discovery_input}
             case "emailDomain":
-                return {"login_hint": discovery_value, "orgDiscoveryType": "emailDomain"}
+                return {"login_hint": discovery_input, "orgDiscoveryType": "emailDomain"}
             case _:
                 raise ValidationError(f"Unsupported org_discovery_type: {org_discovery_type}")
 
@@ -276,7 +307,7 @@ class AgentAuthManager:
         self,
         scopes: List[str],
         org_discovery_type: OrgDiscoveryType,
-        discovery_value: str,
+        discovery_input: str,
         state: Optional[str] = None,
         resource: Optional[str] = None,
         isEnhancedOrgAuth: Optional[bool] = False,
@@ -286,7 +317,7 @@ class AgentAuthManager:
 
         :param scopes: List of OAuth2 scopes to request
         :param org_discovery_type: The type of organization discovery ('orgID', 'orgHandle', 'org', 'emailDomain')
-        :param discovery_value: The identifier whose meaning depends on ``org_discovery_type``:
+        :param discovery_input: The identifier whose meaning depends on ``org_discovery_type``:
             ``"orgID"`` → organization UUID, ``"orgHandle"`` → org handle slug,
             ``"org"`` → org name, ``"emailDomain"`` → user email address used as login hint.
         :param state: Optional state parameter (generated if not provided)
@@ -309,7 +340,7 @@ class AgentAuthManager:
         if not isEnhancedOrgAuth:
             auth_params["fidp"] = "OrganizationSSO"
 
-        auth_params.update(self._build_org_discovery_params(org_discovery_type, discovery_value))
+        auth_params.update(self._build_org_discovery_params(org_discovery_type, discovery_input))
 
         if resource:
             auth_params["resource"] = resource
@@ -317,6 +348,11 @@ class AgentAuthManager:
         if self.agent_config:
             auth_params["requested_actor"] = self.agent_config.agent_id
 
+        conflicts = _RESERVED_AUTH_KEYS.intersection(kwargs)
+        if conflicts:
+            raise ValidationError(
+                f"Reserved authorization parameters cannot be overridden: {', '.join(sorted(conflicts))}"
+            )
         auth_params.update(kwargs)
 
         auth_url = build_authorization_url(
@@ -329,7 +365,7 @@ class AgentAuthManager:
         self,
         scopes: List[str],
         org_discovery_type: OrgDiscoveryType,
-        discovery_value: str,
+        discovery_input: str,
         state: Optional[str] = None,
         resource: Optional[str] = None,
         isEnhancedOrgAuth: Optional[bool] = False,
@@ -339,7 +375,7 @@ class AgentAuthManager:
 
         :param scopes: List of OAuth2 scopes to request
         :param org_discovery_type: The type of organization discovery ('orgID', 'orgHandle', 'org', 'emailDomain')
-        :param discovery_value: The identifier whose meaning depends on ``org_discovery_type``:
+        :param discovery_input: The identifier whose meaning depends on ``org_discovery_type``:
             ``"orgID"`` → organization UUID, ``"orgHandle"`` → org handle slug,
             ``"org"`` → org name, ``"emailDomain"`` → user email address used as login hint.
         :param state: Optional state parameter (generated if not provided)
@@ -366,7 +402,7 @@ class AgentAuthManager:
         if not isEnhancedOrgAuth:
             auth_params["fidp"] = "OrganizationSSO"
 
-        auth_params.update(self._build_org_discovery_params(org_discovery_type, discovery_value))
+        auth_params.update(self._build_org_discovery_params(org_discovery_type, discovery_input))
 
         if resource:
             auth_params["resource"] = resource
@@ -374,6 +410,11 @@ class AgentAuthManager:
         if self.agent_config:
             auth_params["requested_actor"] = self.agent_config.agent_id
 
+        conflicts = _RESERVED_AUTH_KEYS.intersection(kwargs)
+        if conflicts:
+            raise ValidationError(
+                f"Reserved authorization parameters cannot be overridden: {', '.join(sorted(conflicts))}"
+            )
         auth_params.update(kwargs)
 
         auth_url = build_authorization_url(
