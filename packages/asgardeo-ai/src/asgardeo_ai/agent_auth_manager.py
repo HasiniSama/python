@@ -228,6 +228,126 @@ class AgentAuthManager:
         )
         return auth_url, state, code_verifier    
 
+    def get_org_authorization_url(
+        self,
+        scopes: List[str],
+        org_discovery_type: str,
+        value: str,
+        state: Optional[str] = None,
+        resource: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Tuple[str, str]:
+        """Generate authorization URL for organization-specific user authentication.
+        
+        :param scopes: List of OAuth scopes to request
+        :param org_discovery_type: The type of organization discovery ('orgID', 'orgHandle', 'org', 'emailDomain')
+        :param value: The value for the discovery type
+        :param state: Optional state parameter (generated if not provided)
+        :param resource: Optional resource parameter
+        :param kwargs: Additional parameters for the authorization URL
+        :return: Tuple of (authorization_url, state)
+        """
+        if not state:
+            state = generate_state()
+            
+        auth_params = {
+            "client_id": self.config.client_id,
+            "redirect_uri": self.config.redirect_uri,
+            "scope": " ".join(scopes),
+            "state": state,
+            "response_type": "code",
+            "fidp": "OrganizationSSO",
+        }
+        
+        # Switch case to handle each discovery type
+        if org_discovery_type == "orgID":
+            auth_params["orgId"] = value
+        elif org_discovery_type == "orgHandle":
+            auth_params["orgHandle"] = value
+        elif org_discovery_type == "org":
+            auth_params["org"] = value
+        elif org_discovery_type == "emailDomain":
+            auth_params["login_hint"] = value
+            auth_params["orgDiscoveryType"] = "emailDomain"
+        else:
+            raise ValueError(f"Unsupported org_discovery_type: {org_discovery_type}")
+            
+        if resource:
+            auth_params["resource"] = resource
+            
+        if self.agent_config:
+            auth_params["requested_actor"] = self.agent_config.agent_id
+            
+        auth_params.update(kwargs)
+        
+        auth_url = build_authorization_url(
+            f"{self.config.base_url}/oauth2/authorize",
+            auth_params
+        )
+        return auth_url, state
+
+    def get_org_authorization_url_with_pkce(
+        self,
+        scopes: List[str],
+        org_discovery_type: str,
+        value: str,
+        state: Optional[str] = None,
+        resource: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Tuple[str, str, str]:
+        """Generate authorization URL for organization-specific user authentication with PKCE.
+        
+        :param scopes: List of OAuth scopes to request
+        :param org_discovery_type: The type of organization discovery ('orgID', 'orgHandle', 'org', 'emailDomain')
+        :param value: The value for the discovery type
+        :param state: Optional state parameter (generated if not provided)
+        :param resource: Optional resource parameter
+        :param kwargs: Additional parameters for the authorization URL
+        :return: Tuple of (authorization_url, state, code_verifier)
+        """
+        if not state:
+            state = generate_state()
+
+        code_verifier, code_challenge = generate_pkce_pair()    
+            
+        auth_params = {
+            "client_id": self.config.client_id,
+            "redirect_uri": self.config.redirect_uri,
+            "scope": " ".join(scopes),
+            "state": state,
+            "response_type": "code",
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "fidp": "OrganizationSSO",
+        }
+        
+        # Switch case to handle each discovery type
+        if org_discovery_type == "orgID":
+            auth_params["orgId"] = value
+        elif org_discovery_type == "orgHandle":
+            auth_params["orgHandle"] = value
+        elif org_discovery_type == "org":
+            auth_params["org"] = value
+        elif org_discovery_type == "emailDomain":
+            auth_params["login_hint"] = value
+            auth_params["orgDiscoveryType"] = "emailDomain"
+        else:
+            raise ValueError(f"Unsupported org_discovery_type: {org_discovery_type}")
+            
+        if resource:
+            auth_params["resource"] = resource
+            
+        if self.agent_config:
+            auth_params["requested_actor"] = self.agent_config.agent_id
+            
+        auth_params.update(kwargs)
+        
+        auth_url = build_authorization_url(
+            f"{self.config.base_url}/oauth2/authorize",
+            auth_params
+        )
+        return auth_url, state, code_verifier
+
     async def get_obo_token(
         self,
         auth_code: str,
