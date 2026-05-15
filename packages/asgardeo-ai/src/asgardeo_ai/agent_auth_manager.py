@@ -144,6 +144,35 @@ class AgentAuthManager:
             logger.error(f"Agent authentication failed: {e}")
             raise AuthenticationError(f"Agent authentication failed: {e}")
 
+    async def get_organization_agent_token(
+        self,
+        switching_organization: str,
+        agent_scopes: Optional[List[str]] = None,
+        org_scopes: Optional[List[str]] = None
+    ) -> OAuthToken:
+        """Get access token for the AI agent and switch it to a sub-organization.
+        
+        :param switching_organization: The ID or UUID of the target organization.
+        :param agent_scopes: Optional list of OAuth scopes to request for the initial agent token.
+        :param org_scopes: Optional list of OAuth scopes to request for the switched token.
+        :return: OAuth token for the switched organization.
+        """
+        if not switching_organization:
+            raise ValidationError("switching_organization is required.")
+
+        # 1. Get agent token
+        agent_token = await self.get_agent_token(scopes=agent_scopes)
+        
+        if not agent_token or not agent_token.access_token:
+            raise TokenError("Failed to obtain a valid agent access token.")
+            
+        # 2. Switch token to organization
+        return await self.switch_token_to_organization(
+            token=agent_token.access_token,
+            switching_organization=switching_organization,
+            scopes=org_scopes
+        )
+
     def get_authorization_url(
         self,
         scopes: List[str],
