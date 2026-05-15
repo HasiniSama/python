@@ -327,6 +327,18 @@ class AsgardeoTokenClient:
             scope = kwargs.get("scope")
             if scope:
                 data["scope"] = scope
+        elif grant_type == "organization_switch":
+            token = kwargs.get("token")
+            switching_organization = kwargs.get("switching_organization")
+            if not token or not switching_organization:
+                raise ValidationError(
+                    "token and switching_organization are required for 'organization_switch' grant type.",
+                )
+            data["token"] = token
+            data["switching_organization"] = switching_organization
+            scope = kwargs.get("scope")
+            if scope:
+                data["scope"] = scope
         else:
             raise ValidationError(f"Unsupported grant type: {grant_type}")
 
